@@ -1,0 +1,188 @@
+from machine import Pin, PWM
+import time
+
+# ============= BUZZER STARTUP =============
+def starting():
+    buzzer = PWM(Pin(22))
+    notes = {
+        "C5": 523, "E5": 659, "G5": 784, "A4": 440, "B4": 494,
+        "E6": 1319, "C6": 1047, "D6": 1175, "G6": 1568,
+        "G4": 392, "E4": 330, "A4_low": 220
+    }
+    sound_type = "1UP"  
+    melodies = {
+        "1UP": [("E5", 0.1), ("G5", 0.1), ("E6", 0.1), ("C6", 0.1), ("D6", 0.1), ("G6", 0.1)],
+    }
+    for note, duration in melodies[sound_type]:
+        buzzer.freq(notes[note])
+        buzzer.duty_u16(32768)  
+        time.sleep(duration)
+        buzzer.duty_u16(0)  
+        time.sleep(0.05)  
+    buzzer.deinit()
+
+starting()
+
+# ============= START BUTTON =============
+START = Pin(21, Pin.IN)
+
+# ============= LINE SENSORS - DIGITAL IR SENSORS =============
+# IR sensors: Digital output (0 = black/line, 1 = white/no line)
+s1 = Pin(0, Pin.IN, Pin.PULL_UP)   # Far Left
+s2 = Pin(1, Pin.IN, Pin.PULL_UP)   # Left-Center
+s3 = Pin(2, Pin.IN, Pin.PULL_UP)   # Center
+s4 = Pin(3, Pin.IN, Pin.PULL_UP)   # Right-Center
+s5 = Pin(4, Pin.IN, Pin.PULL_UP)   # Far Right
+
+# ============= MOTOR CONTROL =============
+Motor_RIGHT_pwm = PWM(Pin(10))
+Motor_RIGHT_dir = Pin(11, Pin.OUT)
+
+Motor_LEFT_pwm = PWM(Pin(8))
+Motor_LEFT_dir = Pin(9, Pin.OUT)
+
+Motor_RIGHT_pwm.freq(1000)
+Motor_LEFT_pwm.freq(1000)
+
+# ============= RELAY CONTROL =============
+relay1 = Pin(12, Pin.OUT)  # Relay 1
+relay2 = Pin(13, Pin.OUT)  # Relay 2
+relay1.value(0)
+relay2.value(0)
+
+# ============= MOVEMENT FUNCTION =============
+def Move(speedL, speedR):
+    """Control motor speed and direction"""
+    # Set motor directions
+    if speedL > 0 and speedR > 0:  # Forward
+        Motor_LEFT_dir.value(0)
+        Motor_RIGHT_dir.value(0)
+    elif speedL < 0 and speedR < 0:  # Backward
+        Motor_LEFT_dir.value(1)
+        Motor_RIGHT_dir.value(1)
+    elif speedL < 0 and speedR > 0:  # Turn left
+        Motor_LEFT_dir.value(1)
+        Motor_RIGHT_dir.value(0)
+    elif speedL > 0 and speedR < 0:  # Turn right
+        Motor_LEFT_dir.value(0)
+        Motor_RIGHT_dir.value(1)
+    
+    # Set motor speeds (0-100)
+    Motor_LEFT_pwm.duty_u16(int(abs(speedL) * 65535 / 100))
+    Motor_RIGHT_pwm.duty_u16(int(abs(speedR) * 65535 / 100))
+
+# ============= STOP FUNCTION =============
+def Stop():
+    """Stop all motors"""
+    Move(0, 0)
+    relay1.value(0)
+    relay2.value(0)
+    print("STOPPED")
+
+# ============= READ SENSORS =============
+def read_sensors():
+    """Read all line sensors (0 = black line, 1 = white)"""
+    sensor1 = s1.value()
+    sensor2 = s2.value()
+    sensor3 = s3.value()
+    sensor4 = s4.value()
+    sensor5 = s5.value()
+    return sensor1, sensor2, sensor3, sensor4, sensor5
+
+# ============= SEARCH DIRECTION =============
+search_direction = 1  # 1 = turn right, -1 = turn left
+
+# ============= MAIN LINE FOLLOWER FUNCTION =============
+def start():
+    """Main line-following control loop"""
+    global search_direction
+    
+    print("=== LINE FOLLOWER STARTED ===")
+    
+    base_speed = 70  # Base speed for motors
+    turn_diff = 20   # Speed difference for turning
+    search_speed = 60  # Speed for searching when no line
+    
+    while True:
+        s1_val, s2_val, s3_val, s4_val, s5_val = read_sensors()
+        
+        print(f"Sensors: {s1_val} {s2_val} {s3_val} {s4_val} {s5_val}")
+        
+        # ===== CHECK IF ANY LINE IS DETECTED =====
+        line_detected = not (s1_val == 1 and s2_val == 1 and s3_val == 1 and s4_val == 1 and s5_val == 1)
+        
+        if not line_detected:
+            # NO LINE DETECTED - SEARCH FOR LINE (TURN RIGHT/LEFT ALTERNATELY)
+            if search_direction == 1:
+                # Turn right to search
+                Move(search_speed, search_speed - 40)
+                print("SEARCHING - TURN RIGHT")
+                relay1.value(1)
+                relay2.value(0)
+            else:
+                # Turn left to search
+                Move(search_speed - 40, search_speed)
+                print("SEARCHING - TURN LEFT")
+                relay1.value(0)
+                relay2.value(1)
+        
+        else:
+            # LINE DETECTED - FOLLOW IT
+            
+            # Perfect center - line only on middle sensor
+            if s3_val == 0 and s2_val == 1 and s4_val == 1:
+                Move(base_speed, base_speed)
+                print("STRAIGHT")
+                relay1.value(0)
+                relay2.value(0)
+                search_direction = 1  # Reset to right search if line is lost
+            
+            # Line slightly on right side (s4 or s5)
+            elif s4_val == 0 or s5_val == 0:
+                Move(base_speed, base_speed - turn_diff)
+                print("TURN RIGHT")
+                relay1.value(1)
+                relay2.value(0)
+                search_direction = 1
+            
+            # Line slightly on left side (s2 or s1)
+            elif s2_val == 0 or s1_val == 0:
+                Move(base_speed - turn_diff, base_speed)
+                print("TURN LEFT")
+                relay1.value(0)
+                relay2.value(1)
+                search_direction = -1
+            
+            # Line in center (s2, s3, s4 all on line)
+            elif s2_val == 0 and s3_val == 0 and s4_val == 0:
+                Move(base_speed, base_speed)
+                print("CENTER LINE")
+                relay1.value(0)
+                relay2.value(0)
+                search_direction = 1
+            
+            # Far right turn needed
+            elif s5_val == 0 and s4_val == 0:
+                Move(base_speed - 30, base_speed)
+                print("SHARP RIGHT")
+                relay1.value(1)
+                relay2.value(0)
+                search_direction = 1
+            
+            # Far left turn needed
+            elif s1_val == 0 and s2_val == 0:
+                Move(base_speed, base_speed - 30)
+                print("SHARP LEFT")
+                relay1.value(0)
+                relay2.value(1)
+                search_direction = -1
+        
+        time.sleep(0.05)  # 50ms loop for smooth control
+
+# ============= MAIN LOOP =============
+while True:
+    if START.value() == 0:  # START button pressed (LOW)
+        print("START pressed - Entering line follower mode")
+        time.sleep(0.5)  # Debounce
+        start()
+    time.sleep(0.1)
