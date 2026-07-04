@@ -1,0 +1,225 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Servo.h>
+
+// LCD initialization - Change 0x27 to your I2C address if needed (0x3F is common alternative)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+Servo radarServo;
+
+const int servoPin = 7;
+const int buzzerPin = 8;
+const int echoPin = 10;
+const int triggerPin = 9;
+
+const int detectDistance = 10; // cm
+
+long getDistance() {
+  digitalWrite(triggerPin, LOW);
+  delayMicroseconds(2);
+  
+  digitalWrite(triggerPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(triggerPin, LOW);
+  
+  long duration = pulseIn(echoPin, HIGH, 30000);
+  
+  if (duration == 0) return 999;
+  
+  long distance = duration / 58;
+  
+  return distance;
+}
+
+void setup() {
+  Serial.begin(9600);
+  delay(1000);
+  
+  // LCD Initialization - CRITICAL
+  Wire.begin();
+  delay(500);
+  
+  lcd.init();
+  delay(100);
+  
+  lcd.backlight();
+  delay(100);
+  
+  lcd.clear();
+  delay(100);
+  
+  lcd.setCursor(0, 0);
+  lcd.print("RADAR SYSTEM");
+  
+  lcd.setCursor(0, 1);
+  lcd.print("INITIALIZING...");
+  
+  delay(2000);
+  
+  // Pin Configuration
+  pinMode(triggerPin, OUTPUT);
+  digitalWrite(triggerPin, LOW);
+  
+  pinMode(echoPin, INPUT);
+  
+  pinMode(buzzerPin, OUTPUT);
+  digitalWrite(buzzerPin, LOW);
+
+  radarServo.attach(servoPin);
+  radarServo.write(0);
+  
+  delay(500);
+  
+  // Ready screen
+  lcd.clear();
+  delay(100);
+  
+  lcd.setCursor(0, 0);
+  lcd.print("READY TO SCAN");
+  
+  lcd.setCursor(0, 1);
+  lcd.print("Angle: 0  Dist: 0");
+  
+  delay(2000);
+  
+  Serial.println("\n====== RADAR DETECTION SYSTEM ======");
+  Serial.println("LCD Address: 0x27");
+  Serial.println("Trigger Pin: 9");
+  Serial.println("Echo Pin: 10");
+  Serial.println("Buzzer Pin: 8");
+  Serial.println("Servo Pin: 7");
+  Serial.println("Detection Distance: 160cm");
+  Serial.println("=====================================\n");
+}
+
+void loop() {
+
+  // Forward sweep 0 to 180 degrees
+  for (int angle = 0; angle <= 180; angle += 5) {
+
+    radarServo.write(angle);
+    delay(60);
+
+    long distance = getDistance();
+
+    // Update LCD with real-time data
+    lcd.clear();
+    delay(20);
+    
+    lcd.setCursor(0, 0);
+    lcd.print("Angle:");
+    if (angle < 10) lcd.print("  ");
+    else if (angle < 100) lcd.print(" ");
+    lcd.print(angle);
+    lcd.print("deg");
+    
+    lcd.setCursor(0, 1);
+    lcd.print("Dist:");
+    if (distance < 10) lcd.print("  ");
+    else if (distance < 100) lcd.print(" ");
+    lcd.print(distance);
+    lcd.print("cm");
+
+    // Serial Output
+    Serial.print("Angle: ");
+    Serial.print(angle);
+    Serial.print("deg | Distance: ");
+    Serial.print(distance);
+    Serial.println("cm");
+
+    // Detection Logic
+    if (distance <= detectDistance && distance != 999) {
+
+      digitalWrite(buzzerPin, HIGH);
+      
+      Serial.println("\n*** OBJECT DETECTED ***");
+
+      // Alert Display on LCD
+      lcd.clear();
+      delay(20);
+      
+      lcd.setCursor(0, 0);
+      lcd.print("DETECTION ALERT!");
+      
+      lcd.setCursor(0, 1);
+      lcd.print("Dist:");
+      lcd.print(distance);
+      lcd.print("cm");
+
+      delay(500);
+
+      unsigned long detectionStart = millis();
+
+      // Monitor object for 5 seconds
+      while (millis() - detectionStart < 5000) {
+
+        distance = getDistance();
+
+        lcd.setCursor(0, 0);
+        lcd.print("MONITORING:     ");
+        
+        lcd.setCursor(0, 1);
+        lcd.print("Dist:");
+        if (distance < 10) lcd.print("  ");
+        else if (distance < 100) lcd.print(" ");
+        lcd.print(distance);
+        lcd.print("cm ");
+
+        Serial.print("Monitoring - Distance: ");
+        Serial.print(distance);
+        Serial.println("cm");
+
+        // If object moves away, clear alert
+        if (distance > detectDistance) {
+          digitalWrite(buzzerPin, LOW);
+          
+          lcd.clear();
+          delay(20);
+          
+          lcd.setCursor(0, 0);
+          lcd.print("CLEAR - SAFE");
+          
+          lcd.setCursor(0, 1);
+          lcd.print("Angle:");
+          lcd.print(angle);
+          
+          Serial.println("*** ALERT CLEARED - OBJECT MOVED ***\n");
+          delay(1500);
+          break;
+        }
+
+        delay(100);
+      }
+      
+      // Turn off buzzer after monitoring
+      digitalWrite(buzzerPin, LOW);
+      
+      // Timeout handling
+      if (millis() - detectionStart >= 5000) {
+        lcd.clear();
+        delay(20);
+        
+        lcd.setCursor(0, 0);
+        lcd.print("TIMEOUT RESET");
+        
+        lcd.setCursor(0, 1);
+        lcd.print("Restarting scan");
+        
+        Serial.println("*** DETECTION TIMEOUT - RESETTING ***\n");
+        delay(1500);
+      }
+      
+    } else {
+      digitalWrite(buzzerPin, LOW);
+    }
+  }
+
+  // Reverse sweep 180 to 0 degrees
+  Serial.println("--- Returning to start position ---");
+  
+  for (int angle = 180; angle >= 0; angle -= 5) {
+    radarServo.write(angle);
+    delay(60);
+  }
+  
+  Serial.println("--- Scan cycle complete, restarting ---\n");
+}
